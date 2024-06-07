@@ -1,0 +1,187 @@
+apiVersion: zeabur.com/v1
+kind: Template
+metadata:
+  name: Overleaf
+spec:
+  description: Overleaf is an online LaTeX editor for collaborative scientific writing.
+  coverImage: https://cdn.zeabur.com/overleaf-banner.png
+  icon: https://cdn.zeabur.com/overleaf-icon.png
+  variables:
+    - key: PUBLIC_DOMAIN
+      type: DOMAIN
+      name: Domain
+      description: Domain of your Overleaf app.
+  tags:
+    - LaTeX
+    - Collaboration
+    - Writing
+  readme: |
+    Note: This template is maintained by the Zeabur team. If you have any questions or need help, please contact us at [Zeabur's official Discord server](https://zeabur.com/dc). You can also create issues or pull requests on [https://github.com/zeabur/overleaf-template](https://github.com/zeabur/overleaf-template).
+
+    ---
+
+    Overleaf is an online LaTeX editor that allows multiple users to work together on a single document. It's ideal for collaborative scientific writing and provides a wide range of features to support LaTeX document creation.
+
+    **Core Features**:
+    1. Real-time Collaboration
+    2. Rich Text Editor
+    3. Seamless Git Integration
+    4. Extensive Template Library
+    5. Integration with Reference Managers
+  services:
+    - name: redis
+      template: PREBUILT
+      spec:
+        id: redis
+        name: Redis
+        icon: https://raw.githubusercontent.com/zeabur/service-icons/main/marketplace/redis.svg
+        tags:
+          - Database
+        source:
+          image: redis:6.2
+        ports:
+          - id: database
+            port: 6379
+            type: TCP
+        volumes:
+          - id: data
+            dir: /data
+        env:
+          REDIS_HOST:
+            default: ${CONTAINER_HOSTNAME}
+            expose: true
+            readonly: true
+          REDIS_PORT:
+            default: ${DATABASE_PORT}
+            expose: true
+            readonly: true
+    - name: mongo
+      template: PREBUILT
+      spec:
+        id: mongo
+        name: MongoDB
+        icon: https://raw.githubusercontent.com/zeabur/service-icons/main/marketplace/mongo.svg
+        tags:
+          - Database
+        source:
+          image: mongo:5.0
+        ports:
+          - id: database
+            port: 27017
+            type: TCP
+        volumes:
+          - id: data
+            dir: /data/db
+        env:
+          MONGO_INITDB_ROOT_USERNAME:
+            default: root
+          MONGO_INITDB_ROOT_PASSWORD:
+            default: ${PASSWORD}
+          MONGO_HOST:
+            default: ${CONTAINER_HOSTNAME}
+            expose: true
+            readonly: true
+          MONGO_PORT:
+            default: ${DATABASE_PORT}
+            expose: true
+            readonly: true
+    - name: sharelatex
+      template: CUSTOM
+      spec:
+        name: ShareLaTeX
+        icon: https://cdn.zeabur.com/overleaf-icon.png
+        source:
+          image: sharelatex/sharelatex
+        depends_on:
+          - mongo
+          - redis
+        ports:
+          - id: web
+            port: 80
+            type: HTTP
+        volumes:
+          - id: data
+            dir: /var/lib/overleaf
+        env:
+          OVERLEAF_APP_NAME:
+            default: Overleaf Community Edition
+          OVERLEAF_MONGO_URL:
+            default: mongodb://${MONGO_HOST}:${MONGO_PORT}/sharelatex
+          OVERLEAF_REDIS_HOST:
+            default: ${REDIS_HOST}
+          REDIS_HOST:
+            default: ${REDIS_HOST}
+          ENABLED_LINKED_FILE_TYPES:
+            default: 'project_file,project_output_file'
+          ENABLE_CONVERSIONS:
+            default: 'true'
+          EMAIL_CONFIRMATION_DISABLED:
+            default: 'true'
+          TEXMFVAR:
+            default: /var/lib/overleaf/tmp/texmf-var
+    - name: nginx
+      template: PREBUILT
+      domainKey: PUBLIC_DOMAIN
+      spec:
+        id: nginx
+        name: NGINX
+        description: nginx [engine x] is an HTTP and reverse proxy server, a mail proxy server, and a generic TCP/UDP proxy server, originally written by Igor Sysoev.
+        icon: https://www.svgrepo.com/show/373924/nginx.svg
+        tags:
+          - Proxy
+          - Server
+        source:
+          image: nginx:1.25
+        ports:
+          - id: web
+            port: 80
+            type: HTTP
+        configs:
+          - path: /etc/nginx/proxy.conf
+            template: |
+              proxy_set_header Host $host;
+              proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+              proxy_set_header X-Forwarded-Proto $scheme;
+              proxy_http_version 1.1;
+              proxy_set_header Connection "";
+              proxy_buffering off;
+              proxy_read_timeout 3600s;
+              proxy_send_timeout 3600s;
+          - path: /etc/nginx/nginx.conf
+            template: |
+              user  nginx;
+              worker_processes  auto;
+              
+              error_log  /var/log/nginx/error.log notice;
+              pid        /var/run/nginx.pid;
+              
+              events {
+                worker_connections  1024;
+              }
+
+              http {
+                include       /etc/nginx/mime.types;
+                default_type  application/octet-stream;
+              
+                log_format  main  '$remote_addr - $remote_user [$time_local] "$request" '
+                '$status $body_bytes_sent "$http_referer" '
+                '"$http_user_agent" "$http_x_forwarded_for"';
+              
+                access_log  /var/log/nginx/access.log  main;
+              
+                sendfile        on;
+                keepalive_timeout  65;
+                client_max_body_size 15M;
+                include /etc/nginx/conf.d/*.conf;
+              }
+          - path: /etc/nginx/conf.d/default.conf
+            template: |
+              server {
+                listen 80;
+                server_name _;
+              
+                location / {
+                  proxy_pass http://sharelatex:80;
+                  include proxy.conf;
+                }
+              }
